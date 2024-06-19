@@ -10,6 +10,7 @@ public class MusicService : IMusicService
     private readonly IAPIService _apiService;
     private readonly IConfiguration _configuration;
     private readonly IMapper _mapper;
+    private readonly HttpClient _httpClient;
 
     private readonly string _urlPrincipal;
 
@@ -20,14 +21,15 @@ public class MusicService : IMusicService
         _mapper = mapper;
 
         _urlPrincipal = _configuration.GetValue<string>("UrlPrincipal");
+
+        _httpClient = new HttpClient();
     }
 
     public async Task<ResponseDTO<List<MusicCollectionDTO>>> GetListMusic(string term)
     {
         try
         {
-            var httpClient = new HttpClient();
-            var clientId = await GetClientId(httpClient);
+            var clientId = await GetClientId(_httpClient);
 
             var musicList = await _apiService.GetListMusic(term, clientId);
             if (!musicList.IsSuccessStatusCode) throw new Exception(musicList.Error.Message);
@@ -65,12 +67,36 @@ public class MusicService : IMusicService
     {
         try
         {
-            var httpClient = new HttpClient();
-            var clientId = await GetClientId(httpClient);
+            var clientId = await GetClientId(_httpClient);
 
-            var musicUrl = await httpClient.GetFromJsonAsync<MusicUrl>($"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}");
-            var bytes = await httpClient.GetByteArrayAsync(musicUrl.Url);
+            var musicUrl = await _httpClient.GetFromJsonAsync<MusicUrl>($"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}");
 
+            var bytes = await _httpClient.GetByteArrayAsync(musicUrl.Url);
+
+            var file = new FileDownloaderDTO { Bytes = bytes, Name = request.Name, Type = request.Type };
+
+            return new ResponseDTO<FileDownloaderDTO>(file, null);
+        }
+        catch (Exception ex)
+        {
+            return new ResponseDTO<FileDownloaderDTO>(null, ex.Message);
+        }
+    }
+
+    public async Task<ResponseDTO<FileDownloaderDTO>> GetFileMusicHLS(RequestMusicDTO request)
+    {
+        try
+        {
+            var clientId = await GetClientId(_httpClient);
+
+            var url = $"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}";
+
+            var musicUrl = await _httpClient.GetFromJsonAsync<MusicUrl>($"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}");
+
+            var playList = await _httpClient.GetStringAsync(musicUrl.Url);
+            var linksTrechos = ExtrairLinksDosTrechos(playList);
+
+            var bytes = await DownloadTrechos(linksTrechos);
             var file = new FileDownloaderDTO { Bytes = bytes, Name = request.Name, Type = request.Type };
 
             return new ResponseDTO<FileDownloaderDTO>(file, null);
@@ -85,11 +111,25 @@ public class MusicService : IMusicService
     {
         try
         {
+            RequestMusicDTO request = null;
+
             var listMusic = await GetListMusic(term);
             var music = listMusic.Data.FirstOrDefault();
-            var type = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "progressive").Format.MimeType;
-            var url = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "progressive").Url;
-            var request = new RequestMusicDTO { Name = music.Title, Type = type, TrackAuthorization = music.TrackAuthorization, Url = url };
+
+            var type = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "progressive")?.Format.MimeType;
+            var url = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "progressive")?.Url;
+
+            if (url is null || type is null)
+            {
+                type = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "hls")?.Format.MimeType;
+                url = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "hls")?.Url;
+
+                request = new RequestMusicDTO { Name = music.Title, Type = type, TrackAuthorization = music.TrackAuthorization, Url = url };
+
+                return await GetFileMusicHLS(request);
+            }
+
+            request = new RequestMusicDTO { Name = music.Title, Type = type, TrackAuthorization = music.TrackAuthorization, Url = url };
 
             return await GetFileMusic(request);
 
@@ -117,9 +157,8 @@ public class MusicService : IMusicService
         var pagePrincipal = await GetPagePrincipal(httpClient, _urlPrincipal);
 
         var comecoLinks = pagePrincipal.IndexOf("<script src=\"https://a-v2.sndcdn.com");
-        var links = pagePrincipal.Substring(comecoLinks, pagePrincipal.Length - comecoLinks);
         var listaDeLinks = pagePrincipal.Substring(comecoLinks, pagePrincipal.Length - comecoLinks).Split("</script>\n<script").ToList().Select(src =>
-        {
+        { 
             if (src.Contains("<script src=\"https")) return string.Empty;
             string nova = src.Replace(" crossorigin src=\"", "").Replace("\">", "").Replace("</script>\n</body>\n</html>", "").Replace("\n", "");
             return nova;
@@ -143,5 +182,34 @@ public class MusicService : IMusicService
         }
 
         return clientId;
+    }
+
+    private static IEnumerable<string>? ExtrairLinksDosTrechos(string playlist)
+    {
+        if (playlist is null) return null;
+
+        var trechos = playlist.Split("#EXTINF").ToList().Select(trecho =>
+        {
+            var comecoLink = trecho.IndexOf("h");
+
+            if (comecoLink == -1) return string.Empty;
+
+            return trecho.Substring(comecoLink, trecho.Length - comecoLink).Replace("\n#EXT-X-ENDLIST", "");
+        });
+
+        return trechos.Where(trecho => trecho != string.Empty).ToList();
+    }
+
+    private async Task<byte[]> DownloadTrechos(IEnumerable<string> linkTrechos)
+    {
+        using var stream = new MemoryStream();
+
+        foreach (var trecho in linkTrechos)
+        {
+            var dados = await _httpClient.GetByteArrayAsync(trecho);
+            stream.Write(dados);
+        }
+
+        return stream.ToArray();
     }
 }

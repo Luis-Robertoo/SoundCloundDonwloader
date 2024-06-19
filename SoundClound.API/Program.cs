@@ -14,6 +14,8 @@ app.UseSwaggerUI();
 
 app.UseHttpsRedirection();
 
+app.UseCors();
+
 app.UseAuthorization();
 
 app.MapControllers();
@@ -22,6 +24,7 @@ app.Run();
 
 void ConfigureServices(IServiceCollection services, IConfiguration configuration)
 {
+
     services.AddAutoMapper(typeof(Mapping));
 
     services.AddControllers();
@@ -34,4 +37,16 @@ void ConfigureServices(IServiceCollection services, IConfiguration configuration
     services.AddSwaggerGen();
 
     services.AddScoped<IMusicService, MusicService>();
+
+    services.AddCors(options =>
+    {
+        options.AddDefaultPolicy(
+            policy =>
+            {
+                policy
+                .AllowAnyOrigin()
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+            });
+    });
 }
