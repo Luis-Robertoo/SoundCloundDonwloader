@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using SoundClound.API.DTOs;
+using SoundClound.API.Helpers;
 using SoundClound.API.Interfaces;
 
 namespace SoundClound.API.Controllers;
@@ -17,14 +18,22 @@ public class MusicController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetListMusic([FromQuery] string nameMusic)
     {
-        var response = await _musicService.GetListMusic(nameMusic);
-        return Ok(response);
+        try
+        {
+            var response = await _musicService.GetListMusic(nameMusic.ToClean());
+            return Ok(response);
+        }
+        catch (Exception ex) 
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
-    [HttpGet("download")]
-    public async Task<IActionResult> DonwloadMusic([FromQuery] string nameMusic)
+    [HttpGet]
+    [Route("{nameMusic}/download")]
+    public async Task<IActionResult> DonwloadMusic(string nameMusic)
     {
-        var response = await _musicService.GetFileMusic(nameMusic);
+        var response = await _musicService.GetFileMusic(nameMusic.ToClean());
         if (response.Error != null) return BadRequest(response.Error);
 
         return File(response.Data.Bytes, response.Data.Type, response.Data.Name);

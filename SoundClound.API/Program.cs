@@ -1,3 +1,4 @@
+using Microsoft.OpenApi.Models;
 using Refit;
 using SoundClound.API.Helpers;
 using SoundClound.API.Interfaces;
@@ -34,7 +35,15 @@ void ConfigureServices(IServiceCollection services, IConfiguration configuration
     });
 
     services.AddEndpointsApiExplorer();
-    services.AddSwaggerGen();
+    services.AddSwaggerGen(c =>
+    {
+        c.SwaggerDoc("v1",
+            new OpenApiInfo
+            {
+                Title = "Download SoundClound - V1",
+                Version = "v1"
+            });
+    });
 
     services.AddScoped<IMusicService, MusicService>();
 

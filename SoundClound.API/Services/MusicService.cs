@@ -13,6 +13,7 @@ public class MusicService : IMusicService
     private readonly HttpClient _httpClient;
 
     private readonly string _urlPrincipal;
+    private readonly string _urlAPI;
 
     public MusicService(IAPIService apiService, IConfiguration configuration, IMapper mapper)
     {
@@ -21,6 +22,7 @@ public class MusicService : IMusicService
         _mapper = mapper;
 
         _urlPrincipal = _configuration.GetValue<string>("UrlPrincipal");
+        _urlAPI = _configuration.GetValue<string>("UrlApi2");
 
         _httpClient = new HttpClient();
     }
@@ -29,12 +31,14 @@ public class MusicService : IMusicService
     {
         try
         {
-            var clientId = await GetClientId(_httpClient);
+            var clientId = await GetClientId();
 
-            var musicList = await _apiService.GetListMusic(term, clientId);
-            if (!musicList.IsSuccessStatusCode) throw new Exception(musicList.Error.Message);
+            var urlMusica = $"{_urlAPI}/search?q={term}&client_id={clientId}&limit=20&offset=0&linked_partitioning=1&app_locale=pt_BR";
 
-            var response = _mapper.Map<List<MusicCollectionResponse>, List<MusicCollectionDTO>>(musicList.Content.Collection);
+            var musicList = await _httpClient.GetFromJsonAsync<ListMusicResponse>(urlMusica);
+            if (musicList is null) throw new Exception("Erro ao obter lista de musicas");
+
+            var response = _mapper.Map<List<MusicCollectionResponse>, List<MusicCollectionDTO>>(musicList.Collection);
             response.RemoveAll(r => r.Kind != "track");
 
             return new ResponseDTO<List<MusicCollectionDTO>>(response, null);
@@ -42,7 +46,7 @@ public class MusicService : IMusicService
         }
         catch (Exception ex)
         {
-            return new ResponseDTO<List<MusicCollectionDTO>>(null, ex.Message);
+            throw;
         }
     }
 
@@ -50,10 +54,11 @@ public class MusicService : IMusicService
     {
         try
         {
-            var httpClient = new HttpClient();
-            var clientId = await GetClientId(httpClient);
+            if (request.Type != "progressive") return new ResponseDTO<MusicUrl>(null, "Protocolo indisponivel.");
 
-            var musicUrl = await httpClient.GetFromJsonAsync<MusicUrl>($"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}");
+            var clientId = await GetClientId();
+
+            var musicUrl = await _httpClient.GetFromJsonAsync<MusicUrl>($"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}");
 
             return new ResponseDTO<MusicUrl>(musicUrl, null);
         }
@@ -67,7 +72,7 @@ public class MusicService : IMusicService
     {
         try
         {
-            var clientId = await GetClientId(_httpClient);
+            var clientId = await GetClientId();
 
             var musicUrl = await _httpClient.GetFromJsonAsync<MusicUrl>($"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}");
 
@@ -87,7 +92,7 @@ public class MusicService : IMusicService
     {
         try
         {
-            var clientId = await GetClientId(_httpClient);
+            var clientId = await GetClientId();
 
             var url = $"{request.Url}?client_id={clientId}&track_authorization={request.TrackAuthorization}";
 
@@ -95,7 +100,7 @@ public class MusicService : IMusicService
 
             var playList = await _httpClient.GetStringAsync(musicUrl.Url);
             var linksTrechos = ExtrairLinksDosTrechos(playList);
-
+            
             var bytes = await DownloadTrechos(linksTrechos);
             var file = new FileDownloaderDTO { Bytes = bytes, Name = request.Name, Type = request.Type };
 
@@ -124,12 +129,12 @@ public class MusicService : IMusicService
                 type = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "hls")?.Format.MimeType;
                 url = music.Media.Transcodings.FirstOrDefault(t => t.Format.Protocol == "hls")?.Url;
 
-                request = new RequestMusicDTO { Name = music.Title, Type = type, TrackAuthorization = music.TrackAuthorization, Url = url };
+                request = new RequestMusicDTO(music.Title, type, url, music.TrackAuthorization );
 
                 return await GetFileMusicHLS(request);
             }
 
-            request = new RequestMusicDTO { Name = music.Title, Type = type, TrackAuthorization = music.TrackAuthorization, Url = url };
+            request = new RequestMusicDTO(music.Title, type, url, music.TrackAuthorization);
 
             return await GetFileMusic(request);
 
@@ -140,9 +145,9 @@ public class MusicService : IMusicService
         }
     }
 
-    private async Task<string>? GetPagePrincipal(HttpClient httpClient, string url)
+    private async Task<string>? GetPagePrincipal(string url)
     {
-        var response = await httpClient.GetAsync(url);
+        var response = await _httpClient.GetAsync(url);
 
         if (!response.IsSuccessStatusCode)
             return null;
@@ -152,9 +157,9 @@ public class MusicService : IMusicService
         return pagePrincipal;
     }
 
-    private async Task<string> GetClientId(HttpClient httpClient)
+    private async Task<string> GetClientId()
     {
-        var pagePrincipal = await GetPagePrincipal(httpClient, _urlPrincipal);
+        var pagePrincipal = await GetPagePrincipal(_urlPrincipal);
 
         var comecoLinks = pagePrincipal.IndexOf("<script src=\"https://a-v2.sndcdn.com");
         var listaDeLinks = pagePrincipal.Substring(comecoLinks, pagePrincipal.Length - comecoLinks).Split("</script>\n<script").ToList().Select(src =>
@@ -170,7 +175,7 @@ public class MusicService : IMusicService
         {
             if (link.Equals("")) continue;
 
-            using HttpResponseMessage js = await httpClient.GetAsync(link);
+            using HttpResponseMessage js = await _httpClient.GetAsync(link);
             var texto = js.Content.ReadAsStringAsync().Result;
             var comecoLink = texto.IndexOf("{client_id:\"");
             var fimLink = texto.IndexOf("\",nonce:e.nonce}))");
@@ -207,8 +212,9 @@ public class MusicService : IMusicService
         foreach (var trecho in linkTrechos)
         {
             var dados = await _httpClient.GetByteArrayAsync(trecho);
+            if(dados is null) continue;
             stream.Write(dados);
-        }
+        }        
 
         return stream.ToArray();
     }
