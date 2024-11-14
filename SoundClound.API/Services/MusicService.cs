@@ -46,7 +46,7 @@ public class MusicService : IMusicService
         }
         catch (Exception ex)
         {
-            throw;
+            return new ResponseDTO<List<MusicCollectionDTO>>(null, ex.Message);
         }
     }
 
